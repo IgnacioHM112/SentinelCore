@@ -28,7 +28,7 @@ export default function Sidebar({ open, onClose }) {
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
             V
           </div>
-          <span className="font-bold text-gray-800">Vigiplan</span>
+          <span className="font-bold text-gray-800">SentinelCore</span>
         </div>
 
         <nav className="p-4 space-y-1">
