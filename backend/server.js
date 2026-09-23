@@ -10,9 +10,10 @@ const vigiladoresRoutes = require('./routes/vigiladores');
 const requerimientosRoutes = require('./routes/requerimientos');
 const asignacionesRoutes = require('./routes/asignaciones');
 const diagnosticoRoutes = require('./routes/diagnostico');
+const authRoutes = require('./routes/auth');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 18000;
 
 app.use(cors());
 app.use(express.json());
@@ -25,9 +26,10 @@ app.use('/api/requerimientos', requerimientosRoutes);
 console.log('asignacionesRoutes:', asignacionesRoutes);
 app.use('/api/asignaciones', asignacionesRoutes);
 app.use('/api/diagnostico', diagnosticoRoutes);
+app.use('/api/auth', authRoutes);
 
 app.get('/', (_req, res) => {
-  res.json({ message: 'API Vigiplan funcionando' });
+  res.json({ message: 'API SentinelCore funcionando' });
 });
 
 async function start() {
@@ -42,7 +44,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log('');
     console.log('═══════════════════════════════════════════');
-    console.log('  VIGIPLAN — Sistema de Gestión de Turnos');
+    console.log('  SENTINELCORE — Sistema de Gestión de Turnos');
     console.log('═══════════════════════════════════════════');
     console.log('  Estado:    ENCENDIDO');
     console.log(`  Puerto:    ${PORT}`);

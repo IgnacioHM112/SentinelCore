@@ -34,12 +34,25 @@ function buildShift(item) {
   };
 }
 
+function contarFinesDeSemanaTrabajados(fechas) {
+  let sabados = 0, domingos = 0;
+  for (const f of fechas) {
+    const fechaStr = typeof f === 'string' ? f : f.toISOString().slice(0,10);
+    const dia = new Date(fechaStr).getDay();
+    if (dia === 6) sabados++;
+    if (dia === 0) domingos++;
+  }
+  return { sabados, domingos };
+}
+
 function validarEnMemoria({
   nuevoVigiladorId,
   nuevaFecha,
   turno,
   asignacionesExistentes,
   asignacionesPropuestas,
+  horasAcumuladas,
+  maxHorasMensuales,
 }) {
   const conflictos = [];
 
@@ -50,13 +63,15 @@ function validarEnMemoria({
       .filter((a) => a.id_vigilador === nuevoVigiladorId),
   ].map(buildShift);
 
+  const duracionNum = Number(turno.duracion_horas);
   const nuevoShift = buildShift({
     fecha_asignacion: nuevaFecha,
     hora_inicio: turno.hora_inicio,
     hora_fin: turno.hora_fin,
-    duracion_horas: turno.duracion_horas,
+    duracion_horas: duracionNum,
   });
 
+  // 1. Descanso 12hs entre turnos
   if (todas.length > 0) {
     const ordenadas = [...todas].sort((a, b) => a.inicio - b.inicio);
 
@@ -64,9 +79,7 @@ function validarEnMemoria({
     if (previa) {
       const descanso = diffHoras(nuevoShift.inicio, previa.fin);
       if (descanso < 12) {
-        conflictos.push(
-          `No cumple 12 hs de descanso (${descanso.toFixed(1)} hs desde turno anterior)`
-        );
+        conflictos.push(`Descanso < 12hs (${descanso.toFixed(1)}hs desde turno anterior)`);
       }
     }
 
@@ -74,13 +87,12 @@ function validarEnMemoria({
     if (siguiente) {
       const descanso = diffHoras(siguiente.inicio, nuevoShift.fin);
       if (descanso < 12) {
-        conflictos.push(
-          `No cumple 12 hs de descanso (${descanso.toFixed(1)} hs hasta próximo turno)`
-        );
+        conflictos.push(`Descanso < 12hs (${descanso.toFixed(1)}hs hasta próximo turno)`);
       }
     }
   }
 
+  // 2. Máx 6 días consecutivos
   const fechasUnicas = new Set(todas.map((a) => a.fecha));
   fechasUnicas.add(nuevaFecha);
   const fechasArray = Array.from(fechasUnicas).sort();
@@ -90,36 +102,59 @@ function validarEnMemoria({
   for (let i = idxNueva - 1; i >= 0; i--) {
     const d1 = new Date(fechasArray[i]);
     const d2 = new Date(fechasArray[i + 1]);
-    if ((d2 - d1) / (1000 * 60 * 60 * 24) === 1) {
-      bloqueAtras++;
-    } else break;
+    if ((d2 - d1) / (1000 * 60 * 60 * 24) === 1) bloqueAtras++;
+    else break;
   }
   let bloqueAdelante = 0;
   for (let i = idxNueva + 1; i < fechasArray.length; i++) {
     const d1 = new Date(fechasArray[i]);
     const d2 = new Date(fechasArray[i - 1]);
-    if ((d1 - d2) / (1000 * 60 * 60 * 24) === 1) {
-      bloqueAdelante++;
-    } else break;
+    if ((d1 - d2) / (1000 * 60 * 60 * 24) === 1) bloqueAdelante++;
+    else break;
   }
   const totalConsecutivos = 1 + bloqueAtras + bloqueAdelante;
   if (totalConsecutivos >= 7) {
-    conflictos.push(`Supera los 6 días consecutivos de trabajo (${totalConsecutivos} días)`);
+    conflictos.push(`Máx 6 días consecutivos (serían ${totalConsecutivos})`);
   }
 
+  // 3. Máx 12hs/día
   const mismoDia = todas.filter((a) => a.fecha === nuevaFecha);
   const horasMismoDia = mismoDia.reduce((sum, a) => sum + a.duracionHoras, 0);
-  const totalHoras = horasMismoDia + turno.duracion_horas;
+  const totalHoras = horasMismoDia + duracionNum;
   if (totalHoras > 12) {
-    conflictos.push(
-      `Supera las 12 hs diarias (${horasMismoDia.toFixed(1)} + ${turno.duracion_horas.toFixed(1)} = ${totalHoras.toFixed(1)} hs)`
-    );
+    conflictos.push(`Máx 12hs/día (${totalHoras.toFixed(1)}hs)`);
   }
 
+  // 4. No solapamiento mismo día
   for (const existente of mismoDia) {
     if (nuevoShift.inicio < existente.fin && existente.inicio < nuevoShift.fin) {
-      conflictos.push(`Solapamiento horario con turno existente`);
+      conflictos.push(`Solapamiento horario`);
     }
+  }
+
+// 5. Máx horas mensuales
+  const horasProyectadas = (horasAcumuladas[nuevoVigiladorId] || 0) + duracionNum;
+  const maxHorasNum = Number(maxHorasMensuales);
+  if (horasProyectadas > maxHorasNum) {
+    conflictos.push(`Supera max_horas_mensuales (${horasProyectadas.toFixed(2)}/${maxHorasNum})`);
+  }
+
+  // 6. Franco fin de semana: al menos 1 sábado O 1 domingo libre en el mes
+  const finesTrabajados = contarFinesDeSemanaTrabajados([...todas.map(a => a.fecha), nuevaFecha]);
+  const fechaObj = new Date(nuevaFecha);
+  const anio = fechaObj.getFullYear();
+  const mes = fechaObj.getMonth() + 1;
+  const diasEnMes = new Date(anio, mes, 0).getDate();
+  const finesTotalesMes = { sabados: 0, domingos: 0 };
+  for (let d = 1; d <= diasEnMes; d++) {
+    const dia = new Date(anio, mes - 1, d).getDay();
+    if (dia === 6) finesTotalesMes.sabados++;
+    if (dia === 0) finesTotalesMes.domingos++;
+  }
+  const sabadosLibres = finesTotalesMes.sabados - finesTrabajados.sabados;
+  const domingosLibres = finesTotalesMes.domingos - finesTrabajados.domingos;
+  if (sabadosLibres === 0 && domingosLibres === 0) {
+    conflictos.push(`Sin franco fin de semana (necesita 1 sáb O 1 dom libre/mes)`);
   }
 
   if (conflictos.length > 0) {
@@ -127,15 +162,6 @@ function validarEnMemoria({
     conflictos.forEach((c) => console.log(`    -> ${c}`));
   }
   return conflictos;
-}
-
-function shuffle(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
 }
 
 async function generar({ fechaInicio, fechaFin }) {
@@ -154,11 +180,7 @@ async function generar({ fechaInicio, fechaFin }) {
   );
 
   if (reqRows.length === 0) {
-    return {
-      asignaciones_creadas: 0,
-      puestos_descubiertos: 0,
-      detalle: { asignaciones: [], puestos_sin_cubrir: [] },
-    };
+    return { asignaciones_creadas: 0, puestos_descubiertos: 0, detalle: { asignaciones: [], puestos_sin_cubrir: [] } };
   }
 
   const [vigRows] = await pool.query(
@@ -170,18 +192,13 @@ async function generar({ fechaInicio, fechaFin }) {
       asignaciones_creadas: 0,
       puestos_descubiertos: reqRows.length,
       detalle: { asignaciones: [], puestos_sin_cubrir: reqRows.map((r) => ({
-        id_requerimiento: r.id,
-        fecha: r.fecha,
-        puesto: `${r.objetivo_nombre} - ${r.puesto_nombre}`,
-        turno: r.turno_nombre,
+        id_requerimiento: r.id, fecha: r.fecha, puesto: `${r.objetivo_nombre} - ${r.puesto_nombre}`, turno: r.turno_nombre,
       })) },
     };
   }
 
-  const bufferInicio = new Date(fechaInicio);
-  bufferInicio.setDate(bufferInicio.getDate() - 7);
-  const bufferFin = new Date(fechaFin);
-  bufferFin.setDate(bufferFin.getDate() + 7);
+  const bufferInicio = new Date(fechaInicio); bufferInicio.setDate(bufferInicio.getDate() - 7);
+  const bufferFin = new Date(fechaFin); bufferFin.setDate(bufferFin.getDate() + 7);
   const bufferInicioStr = bufferInicio.toISOString().slice(0, 10);
   const bufferFinStr = bufferFin.toISOString().slice(0, 10);
 
@@ -197,10 +214,7 @@ async function generar({ fechaInicio, fechaFin }) {
   );
 
   const horasVigilador = {};
-  const asignacionesExistentes = existentes.map((r) => ({
-    ...r,
-    fecha_asignacion: normalizarFecha(r.fecha_asignacion),
-  }));
+  const asignacionesExistentes = existentes.map((r) => ({ ...r, fecha_asignacion: normalizarFecha(r.fecha_asignacion) }));
 
   for (const vig of vigRows) {
     const hsPrevias = asignacionesExistentes
@@ -209,38 +223,35 @@ async function generar({ fechaInicio, fechaFin }) {
     horasVigilador[vig.id] = hsPrevias;
   }
 
-  const idsRequerimientoAsignados = new Set(
+  const maxHorasMap = {};
+  for (const vig of vigRows) maxHorasMap[vig.id] = vig.max_horas_mensuales;
+
+  const idsReqAsignados = new Set(
     existentes
-      .filter((a) =>
-        reqRows.some((r) => r.id === a.id_requerimiento)
-      )
+      .filter((a) => reqRows.some((r) => r.id === a.id_requerimiento))
       .map((a) => a.id_requerimiento)
   );
 
-  const requerimientosPendientes = reqRows.filter(
-    (r) => !idsRequerimientoAsignados.has(r.id)
-  );
+  const requerimientosPendientes = reqRows.filter((r) => !idsReqAsignados.has(r.id));
 
   const asignacionesPropuestas = [];
   const puestosSinCubrir = [];
 
+  // FAIR SCHEDULING: para cada requerimiento, ordenar vigiladores por horas acumuladas (menos primero)
   for (const req of requerimientosPendientes) {
-    const vigsAleatorio = shuffle(vigRows);
+    const vigsOrdenados = [...vigRows].sort((a, b) => (horasVigilador[a.id] || 0) - (horasVigilador[b.id] || 0));
     let asignado = false;
     const motivos = [];
 
-    for (const vig of vigsAleatorio) {
-      if (horasVigilador[vig.id] >= vig.max_horas_mensuales) {
-        motivos.push(`${vig.nombre}: alcanzó max_horas (${horasVigilador[vig.id]}/${vig.max_horas_mensuales})`);
-        continue;
-      }
-
+    for (const vig of vigsOrdenados) {
       const conflictos = validarEnMemoria({
         nuevoVigiladorId: vig.id,
         nuevaFecha: normalizarFecha(req.fecha),
         turno: req,
         asignacionesExistentes,
         asignacionesPropuestas,
+        horasAcumuladas: horasVigilador,
+        maxHorasMensuales: maxHorasMap[vig.id],
       });
 
       if (conflictos.length === 0) {
@@ -250,13 +261,7 @@ async function generar({ fechaInicio, fechaFin }) {
           fecha_asignacion: req.fecha,
           estado: 'propuesto',
         };
-        asignacionesPropuestas.push({
-          ...entrada,
-          hora_inicio: req.hora_inicio,
-          hora_fin: req.hora_fin,
-          duracion_horas: req.duracion_horas,
-          id_vigilador: vig.id,
-        });
+        asignacionesPropuestas.push({ ...entrada, hora_inicio: req.hora_inicio, hora_fin: req.hora_fin, duracion_horas: req.duracion_horas, id_vigilador: vig.id });
         horasVigilador[vig.id] += Number(req.duracion_horas);
         asignado = true;
         break;
@@ -268,54 +273,28 @@ async function generar({ fechaInicio, fechaFin }) {
     if (!asignado) {
       console.log('===== PUESTO DESCUBIERTO =====');
       console.log(`Req #${req.id} | ${req.fecha} | ${req.objetivo_nombre} - ${req.puesto_nombre} | ${req.turno_nombre} (${req.hora_inicio}-${req.hora_fin}) ${req.duracion_horas}hs`);
-      console.log('Vigiladores disponibles:');
-      vigRows.forEach((v) => {
-        console.log(`  - ${v.nombre} (leg.${v.legajo}) hs:${horasVigilador[v.id]}/${v.max_horas_mensuales}`);
-      });
-      console.log('Motivos de rechazo (primeros 10):');
-      motivos.slice(0, 10).forEach((m) => console.log(`  ${m}`));
+      vigRows.forEach((v) => console.log(`  - ${v.nombre} hs:${horasVigilador[v.id]}/${v.max_horas_mensuales}`));
+      console.log('Motivos:', motivos.slice(0, 5));
       console.log('==============================');
 
       puestosSinCubrir.push({
-        id_requerimiento: req.id,
-        fecha: req.fecha,
-        objetivo: req.objetivo_nombre,
-        puesto: req.puesto_nombre,
-        turno: req.turno_nombre,
-        hora_inicio: req.hora_inicio,
-        hora_fin: req.hora_fin,
+        id_requerimiento: req.id, fecha: req.fecha, objetivo: req.objetivo_nombre,
+        puesto: req.puesto_nombre, turno: req.turno_nombre, hora_inicio: req.hora_inicio, hora_fin: req.hora_fin,
         motivos_rechazo: motivos.slice(0, 5),
       });
     }
   }
 
   if (asignacionesPropuestas.length > 0) {
-    const values = asignacionesPropuestas.map((a) => [
-      a.id_requerimiento,
-      a.id_vigilador,
-      a.fecha_asignacion,
-      a.estado,
-    ]);
+    const values = asignacionesPropuestas.map((a) => [a.id_requerimiento, a.id_vigilador, a.fecha_asignacion, a.estado]);
     const placeholders = values.map(() => '(?, ?, ?, ?)').join(', ');
-    const flat = values.flat();
-    await pool.query(
-      `INSERT INTO asignaciones_cronograma (id_requerimiento, id_vigilador, fecha_asignacion, estado) VALUES ${placeholders}`,
-      flat
-    );
+    await pool.query(`INSERT INTO asignaciones_cronograma (id_requerimiento, id_vigilador, fecha_asignacion, estado) VALUES ${placeholders}`, values.flat());
   }
 
   return {
     asignaciones_creadas: asignacionesPropuestas.length,
     puestos_descubiertos: puestosSinCubrir.length,
-    detalle: {
-      asignaciones: asignacionesPropuestas.map((a) => ({
-        id_requerimiento: a.id_requerimiento,
-        id_vigilador: a.id_vigilador,
-        fecha: a.fecha_asignacion,
-        estado: a.estado,
-      })),
-      puestos_sin_cubrir: puestosSinCubrir,
-    },
+    detalle: { asignaciones: asignacionesPropuestas.map((a) => ({ id_requerimiento: a.id_requerimiento, id_vigilador: a.id_vigilador, fecha: a.fecha_asignacion, estado: a.estado })), puestos_sin_cubrir: puestosSinCubrir },
   };
 }
 

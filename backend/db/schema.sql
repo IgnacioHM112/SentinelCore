@@ -50,3 +50,10 @@ CREATE TABLE IF NOT EXISTS asignaciones_cronograma (
   FOREIGN KEY (id_requerimiento) REFERENCES requerimientos_mensuales(id) ON DELETE CASCADE ON UPDATE CASCADE,
   FOREIGN KEY (id_vigilador) REFERENCES vigiladores(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS usuarios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  rol ENUM('admin', 'encargado') NOT NULL DEFAULT 'encargado'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
